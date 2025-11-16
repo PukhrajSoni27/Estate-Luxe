@@ -71,10 +71,9 @@ export const Navigation = () => {
   }, [isOpen]);
 
   const navItems = [
-    { name: "Home", href: "#home", icon: Home },
+    { name: "Home", href: "/", icon: Home },
     { name: "Features", href: "/features", icon: Home },
     { name: "Valuation", href: "#valuation", icon: Calculator },
-    { name: "Predict", href: "/predict", icon: TrendingUp },
     { name: "Market Insights", href: "#insights", icon: TrendingUp },
     { name: "Calculator", href: "#calculator", icon: BarChart3 },
     { name: "Contact", href: "#contact", icon: Phone },
@@ -109,21 +108,24 @@ export const Navigation = () => {
           {/* Desktop Navigation */}
           <div className="hidden md:block">
             <div className="ml-10 flex items-baseline space-x-1 glass rounded-full px-2 py-1 border-border/50">
-              {navItems.map((item) => (
-                <a
-                  key={item.name}
-                  href={item.href.replace('#', '/')}
-                  className={`hover-ripple px-3 py-2 rounded-full text-sm font-medium transition-all duration-300 hover:bg-muted/60 ${active === item.href ? 'text-foreground bg-muted/60' : 'text-foreground/80 hover:text-foreground'}`}
-                  onMouseMove={(e) => {
-                    const target = e.currentTarget as HTMLElement;
-                    const rect = target.getBoundingClientRect();
-                    target.style.setProperty('--ripple-x', `${e.clientX - rect.left}px`);
-                    target.style.setProperty('--ripple-y', `${e.clientY - rect.top}px`);
-                  }}
-                >
-                  {item.name}
-                </a>
-              ))}
+              {navItems.map((item) => {
+                const isActive = item.href === '/' ? active === '#home' : active === item.href;
+                return (
+                  <a
+                    key={item.name}
+                    href={item.href.replace('#', '/')}
+                    className={`hover-ripple px-3 py-2 rounded-full text-sm font-medium transition-all duration-300 hover:bg-muted/60 ${isActive ? 'text-foreground bg-muted/60' : 'text-foreground/80 hover:text-foreground'}`}
+                    onMouseMove={(e) => {
+                      const target = e.currentTarget as HTMLElement;
+                      const rect = target.getBoundingClientRect();
+                      target.style.setProperty('--ripple-x', `${e.clientX - rect.left}px`);
+                      target.style.setProperty('--ripple-y', `${e.clientY - rect.top}px`);
+                    }}
+                  >
+                    {item.name}
+                  </a>
+                );
+              })}
             </div>
           </div>
 

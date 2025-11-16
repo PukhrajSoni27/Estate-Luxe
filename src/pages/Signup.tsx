@@ -13,15 +13,36 @@ const SignupPage = () => {
   const [avatar, setAvatar] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
 
-  const handleSignup = (e: React.FormEvent) => {
+  const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();
-    localStorage.setItem("auth:user", JSON.stringify({ email, name, password, avatar }));
     try {
-      const profiles = JSON.parse(localStorage.getItem("auth:profiles") || "{}");
-      profiles[email] = { name, password, avatar };
-      localStorage.setItem("auth:profiles", JSON.stringify(profiles));
-    } catch {}
-    window.location.href = "/profile";
+      const response = await fetch("http://127.0.0.1:8000/auth/signup", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          email,
+          name,
+          password,
+          avatar,
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        // Store the token in localStorage for authentication
+        localStorage.setItem("auth:token", data.access_token);
+        localStorage.setItem("auth:user", JSON.stringify({ email, name, avatar }));
+        window.location.href = "/profile";
+      } else {
+        const error = await response.json();
+        alert(`Signup failed: ${error.detail || "Unknown error"}`);
+      }
+    } catch (error) {
+      console.error("Signup error:", error);
+      alert("Signup failed. Please try again.");
+    }
   };
 
   const onPick = () => fileRef.current?.click();

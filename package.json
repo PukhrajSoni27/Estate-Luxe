@@ -8,7 +8,11 @@
     "build": "vite build",
     "build:dev": "vite build --mode development",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "backend:install": "cd Real-estate-project-backend/Backend && pip install -r requirements-backend.txt",
+    "backend:dev": "cd Real-estate-project-backend/Backend && uvicorn main:app --host 0.0.0.0 --port 8000 --reload",
+    "backend:setup:win": "pwsh -NoProfile -ExecutionPolicy Bypass -File Real-estate-project-backend/Backend/setup_env.ps1",
+    "backend:dev:win": "pwsh -NoProfile -ExecutionPolicy Bypass -File Real-estate-project-backend/Backend/start-backend.ps1"
   },
   "dependencies": {
     "@fontsource/inter": "^5.2.7",

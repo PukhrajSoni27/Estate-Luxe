@@ -8,17 +8,10 @@ import { Progress } from "@/components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { CountryCode, formatCurrency, getSavedCountry, saveCountry, convertAndFormatUSD, convertBetweenCountries } from "@/lib/currency";
+import { predictPropertyPrice, API_BASE } from "@/api";
+import { PropertyDetails } from "@/components/PropertyForm";
 
-export type ValuationInput = {
-  address?: string;
-  sqft?: number;
-  bedrooms?: number;
-  bathrooms?: number;
-  yearBuilt?: number;
-  propertyType?: string;
-};
-
-export const ValuationResults = ({ input, stickyHeader = true }: { input?: ValuationInput; stickyHeader?: boolean }) => {
+export const ValuationResults = ({ input, stickyHeader = true }: { input?: PropertyDetails; stickyHeader?: boolean }) => {
   const [selectedTimeframe, setSelectedTimeframe] = useState("1year");
   const [country, setCountry] = useState<CountryCode>(getSavedCountry());
   const [projectionYears, setProjectionYears] = useState<10 | 15 | 20>(15);
@@ -29,8 +22,25 @@ export const ValuationResults = ({ input, stickyHeader = true }: { input?: Valua
     low: 0,
     high: 0,
   }));
+  // API valuation data
+  const [apiValuation, setApiValuation] = useState<{ price_usd: number; price_inr: number } | null>(null);
+  const [apiLoading, setApiLoading] = useState(false);
+  const [apiError, setApiError] = useState<string | null>(null);
+  const [reportLoading, setReportLoading] = useState(false);
   // Global visual multiplier for displaying prices
-  const MULTIPLIER = 4;
+   const getDisplayMultiplier = (c: CountryCode) => {
+     switch (c) {
+       case 'IN':
+         return 75; // show larger INR amounts for Indian properties
+       case 'AE':
+         return 3;
+       case 'US':
+       case 'EU':
+       case 'UK':
+       default:
+         return 1;
+     }
+   };
 
   const saveProperty = (p: { id: string; price: number; address: string; sqft?: number; bedrooms?: number; bathrooms?: number; soldDate?: string }) => {
     try {
@@ -51,8 +61,31 @@ export const ValuationResults = ({ input, stickyHeader = true }: { input?: Valua
     } catch {}
   };
 
+  // Fetch API valuation when input changes
+  useEffect(() => {
+    if (input) {
+      setApiLoading(true);
+      setApiError(null);
+      predictPropertyPrice(input)
+        .then((data) => {
+          setApiValuation(data);
+        })
+        .catch((err) => {
+          console.error("API prediction failed:", err);
+          setApiError(err.message);
+          setApiValuation(null);
+        })
+        .finally(() => {
+          setApiLoading(false);
+        });
+    } else {
+      setApiValuation(null);
+      setApiError(null);
+    }
+  }, [input]);
+
   const valuationData = useMemo(() => {
-    const sqft = Number(input?.sqft || 2150);
+    const sqft = Number(input?.squareFootage || 2150);
     // Apply property-type-specific multiplier so same specs yield different prices across types
     const propertyType = input?.propertyType;
     const typeMultiplierMap: Record<string, number> = {
@@ -101,11 +134,29 @@ export const ValuationResults = ({ input, stickyHeader = true }: { input?: Valua
       const age = Math.max(0, new Date().getFullYear() - year);
       return -age * 500; // depreciate $500 per year for demo
     })();
-    const currentValue = Math.max(40000, Math.round(sqft * baseValuePerSqft + bedroomsAdj + bathroomsAdj + yearAdj));
+    // Use API valuation if available, else local calculation
+    let currentValue: number;
+    if (apiValuation) {
+      // API returns USD, convert to local currency for display
+      currentValue = apiValuation.price_usd; // Keep in USD for now, will convert in display
+    } else {
+      currentValue = Math.max(40000, Math.round(sqft * baseValuePerSqft + bedroomsAdj + bathroomsAdj + yearAdj));
+    }
+    // Create a more realistic price range for market listings.
+    // Use a wider spread for API-backed valuations and adjust by property type.
+    const baseSpread = apiValuation ? 0.18 : 0.12; // 18% for model, 12% for heuristic
+    const typeSpreadAdjust = (() => {
+      if (isLand) return 0.08;
+      if (propertyType === 'condo') return 0.05;
+      if (propertyType === 'townhouse') return 0.03;
+      return 0.0;
+    })();
+    const spread = Math.min(0.40, baseSpread + typeSpreadAdjust); // cap at 40%
+
     return {
       currentValue,
-      confidenceScore: 90,
-      priceRange: { low: Math.round(currentValue * 0.96), high: Math.round(currentValue * 1.04) },
+      confidenceScore: apiValuation ? 95 : 90, // Higher confidence for API
+      priceRange: { low: Math.round(currentValue * (1 - spread)), high: Math.round(currentValue * (1 + spread)) },
       lastUpdated: new Date().toISOString(),
       address: input?.address || "Enter details above",
       sqft,
@@ -113,11 +164,11 @@ export const ValuationResults = ({ input, stickyHeader = true }: { input?: Valua
       bathrooms: Number(input?.bathrooms || 2.5),
       yearBuilt: Number(input?.yearBuilt || 2015),
     };
-  }, [input]);
+  }, [input, apiValuation, country]);
 
   // Initialize displayed values whenever the base valuation changes (keep in current country units)
   useEffect(() => {
-    const multiplier = MULTIPLIER; // Always display 4x prices as requested
+      const multiplier = getDisplayMultiplier(country); // Use country-specific multiplier
     setDisplayValuation({
       current: Math.round(valuationData.currentValue * multiplier),
       low: Math.round(valuationData.priceRange.low * multiplier),
@@ -205,6 +256,18 @@ export const ValuationResults = ({ input, stickyHeader = true }: { input?: Valua
 
   return (
     <section id="valuation-results" className="py-20 bg-gradient-to-br from-background to-muted/20">
+      {/* SVG animation styles used for charts below */}
+      <style>{`
+        .anim-line { stroke-dasharray: 1200; stroke-dashoffset: 1200; animation: draw-line 1400ms ease-out forwards; }
+        @keyframes draw-line { to { stroke-dashoffset: 0; } }
+
+        .anim-dot { transform-origin: center; transform: scale(0.6); opacity: 0; animation: pop-dot 500ms cubic-bezier(.2,.9,.3,1) forwards; }
+        @keyframes pop-dot { to { transform: scale(1); opacity: 1; } }
+
+        /* optional subtle fade for chart area */
+        .chart-fade { opacity: 0; animation: fade-in 600ms ease-out forwards; animation-delay: 180ms; }
+        @keyframes fade-in { to { opacity: 1; } }
+      `}</style>
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         {/* Country Selector */}
         <div className={`${stickyHeader ? 'sticky top-16 z-30' : ''} mb-6`}>
@@ -298,7 +361,7 @@ export const ValuationResults = ({ input, stickyHeader = true }: { input?: Valua
             const years = projection.years;
             const values = projection.values;
             // Apply display multiplier to charted values
-            const dispValues = values.map(v => v * MULTIPLIER);
+            const dispValues = values.map(v => v * getDisplayMultiplier(country));
             const min = Math.min(...dispValues);
             const max = Math.max(...dispValues);
             const pad = (max - min) * 0.1 || 1;
@@ -330,9 +393,9 @@ export const ValuationResults = ({ input, stickyHeader = true }: { input?: Valua
                     <text x={P} y={P - 8} fontSize="11" fill="hsl(var(--muted-foreground))">
                       {values[0].toLocaleString()} → {values[values.length - 1].toLocaleString()}
                     </text>
-                    <path d={path} fill="none" stroke="url(#projGrad)" strokeWidth="3" />
+                    <path className="anim-line" d={path} fill="none" stroke="url(#projGrad)" strokeWidth="3" />
                     {xs.map((x, i) => (
-                      <circle key={i} cx={x} cy={ys[i]} r="2.5" fill="url(#projGrad)" />
+                      <circle key={i} cx={x} cy={ys[i]} r="2.5" fill="url(#projGrad)" className="anim-dot" style={{ animationDelay: `${i * 70}ms` }} />
                     ))}
                   </svg>
                 </div>
@@ -374,7 +437,7 @@ export const ValuationResults = ({ input, stickyHeader = true }: { input?: Valua
                 <Home className="h-6 w-6 text-primary" />
                 <h3 className="text-2xl font-semibold text-foreground">Property Overview</h3>
               </div>
-              
+
               <div className="space-y-3 mb-6">
                 <div className="flex items-center gap-2 text-muted-foreground">
                   <MapPin className="h-4 w-4" />
@@ -413,22 +476,31 @@ export const ValuationResults = ({ input, stickyHeader = true }: { input?: Valua
                 <DollarSign className="h-6 w-6 text-success" />
                 <h3 className="text-2xl font-semibold text-foreground">Current Valuation</h3>
               </div>
-              
+
               <div className="text-center mb-6">
-                <div className="text-5xl font-bold text-gradient bg-gradient-primary bg-clip-text text-transparent mb-2">
-                  {formatCurrency(displayValuation.current, country)}
-                </div>
-                <div className="text-sm text-muted-foreground mb-4">
-                  Range: {formatCurrency(displayValuation.low, country)} - {formatCurrency(displayValuation.high, country)}
-                </div>
-                <div className="flex items-center justify-center gap-2">
-                  <Badge variant="secondary" className="bg-success/10 text-success border-success/20">
-                    <Target className="h-3 w-3 mr-1" />
-                    {valuationData.confidenceScore}% Confidence
-                  </Badge>
-                </div>
+                {apiLoading ? (
+                  <div className="text-lg text-muted-foreground">Loading valuation...</div>
+                ) : apiError ? (
+                  <div className="text-lg text-destructive">Error: {apiError}</div>
+                ) : (
+                  <>
+                    <div className="text-5xl font-bold text-gradient bg-gradient-primary bg-clip-text text-transparent mb-2">
+                      {formatCurrency(displayValuation.current, country)}
+                    </div>
+                    <div className="text-sm text-muted-foreground mb-4">
+                      Range: {formatCurrency(displayValuation.low, country)} - {formatCurrency(displayValuation.high, country)}
+                    </div>
+                    <div className="flex items-center justify-center gap-2">
+                      <Badge variant="secondary" className="bg-success/10 text-success border-success/20">
+                        <Target className="h-3 w-3 mr-1" />
+                        {valuationData.confidenceScore}% Confidence
+                        {apiValuation ? " (AI Model)" : " (Estimated)"}
+                      </Badge>
+                    </div>
+                  </>
+                )}
               </div>
-              
+
               <div className="text-xs text-muted-foreground text-center">
                 Last updated: {new Date(valuationData.lastUpdated).toLocaleDateString()}
               </div>
@@ -492,7 +564,7 @@ export const ValuationResults = ({ input, stickyHeader = true }: { input?: Valua
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="rounded-xl border border-border/50 p-5 bg-muted/20">
                   <div className="text-sm text-muted-foreground mb-1">Average Property</div>
-                  <div className="text-2xl font-bold text-foreground">{formatCurrency(avgLow * MULTIPLIER, country)} - {formatCurrency(avgHigh * MULTIPLIER, country)}</div>
+                    <div className="text-2xl font-bold text-foreground">{formatCurrency(avgLow * getDisplayMultiplier(country), country)} - {formatCurrency(avgHigh * getDisplayMultiplier(country), country)}</div>
                   {guidanceNote ? (
                     <div className="text-xs text-muted-foreground mt-1">{guidanceNote}</div>
                   ) : ppsfAvg ? (
@@ -503,7 +575,7 @@ export const ValuationResults = ({ input, stickyHeader = true }: { input?: Valua
                 <div className="rounded-xl border border-border/50 p-5 bg-gradient-to-br from-secondary/10 to-primary/10">
                   <div className="text-sm text-secondary mb-1">Luxury Property</div>
                   <div className="text-2xl font-bold bg-gradient-to-r from-secondary via-primary to-secondary bg-clip-text text-transparent">
-                    {formatCurrency(luxLow * MULTIPLIER, country)} - {formatCurrency(luxHigh * MULTIPLIER, country)}
+                    {formatCurrency(luxLow * getDisplayMultiplier(country), country)} - {formatCurrency(luxHigh * getDisplayMultiplier(country), country)}
                   </div>
                   {ppsfLux && (
                     <div className="text-xs text-muted-foreground mt-1">~ {formatCurrency(Math.round(ppsfLux), country)}/sqft</div>
@@ -541,7 +613,7 @@ export const ValuationResults = ({ input, stickyHeader = true }: { input?: Valua
               return Math.max(50000, Math.round(val));
             });
             // Apply display multiplier to charted values
-            const dispValues = values.map(v => v * MULTIPLIER);
+            const dispValues = values.map(v => v * getDisplayMultiplier(country));
             const min = Math.min(...dispValues);
             const max = Math.max(...dispValues);
             const pad = (max - min) * 0.1 || 1;
@@ -578,10 +650,10 @@ export const ValuationResults = ({ input, stickyHeader = true }: { input?: Valua
                     {convertAndFormatUSD(min, country)} - {convertAndFormatUSD(max, country)}
                   </text>
                   {/* Line */}
-                  <path d={path} fill="none" stroke="url(#lineGrad)" strokeWidth="3" />
+                    <path className="anim-line" d={path} fill="none" stroke="url(#lineGrad)" strokeWidth="3" />
                   {/* Dots */}
                   {xs.map((x, i) => (
-                    <circle key={i} cx={x} cy={ys[i]} r="2.5" fill="url(#lineGrad)" />
+                    <circle key={i} cx={x} cy={ys[i]} r="2.5" fill="url(#lineGrad)" className="anim-dot" style={{ animationDelay: `${i * 50}ms` }} />
                   ))}
                 </svg>
               </div>
@@ -655,7 +727,7 @@ export const ValuationResults = ({ input, stickyHeader = true }: { input?: Valua
                     </div>
                   </div>
                   <div className="text-sm text-muted-foreground mt-1">
-                    Projected: {convertAndFormatUSD(data.price * MULTIPLIER, country)}
+                    Projected: {convertAndFormatUSD(data.price * getDisplayMultiplier(country), country)}
                   </div>
                 </div>
               ))}
@@ -773,9 +845,68 @@ export const ValuationResults = ({ input, stickyHeader = true }: { input?: Valua
         <div className="flex flex-col sm:flex-row gap-4 justify-center mt-12">
           <Button
             className="btn-premium h-12 px-8"
-            onClick={() => toast({ title: "Downloading report", description: "Your PDF will be generated shortly." })}
+            onClick={async () => {
+              setReportLoading(true);
+              toast({ title: "Downloading report", description: "Generating PDF — please wait." });
+              try {
+                const payload = {
+                  title: `Valuation Report - ${valuationData.address}`,
+                  valuation: {
+                    current: displayValuation.current,
+                    low: displayValuation.low,
+                    high: displayValuation.high,
+                    confidence: valuationData.confidenceScore,
+                    currency: country,
+                  },
+                  features: {
+                    address: valuationData.address,
+                    sqft: valuationData.sqft,
+                    bedrooms: valuationData.bedrooms,
+                    bathrooms: valuationData.bathrooms,
+                    yearBuilt: valuationData.yearBuilt,
+                    ...(input || {}),
+                  },
+                  notes: `Generated by Estate-Luxe on ${new Date().toLocaleString()}`,
+                };
+
+                const url = `${API_BASE.replace(/\/$/, "")}/report`;
+                const res = await fetch(url, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify(payload),
+                });
+
+                if (!res.ok) {
+                  const txt = await res.text().catch(() => res.statusText || "Report generation failed");
+                  throw new Error(txt || `HTTP ${res.status}`);
+                }
+
+                const blob = await res.blob();
+                const blobUrl = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = blobUrl;
+                a.download = `estate-luxe-valuation-${new Date().toISOString().slice(0,10)}.pdf`;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                URL.revokeObjectURL(blobUrl);
+                toast({ title: "Downloaded", description: "Valuation PDF downloaded." });
+              } catch (err: any) {
+                console.error("Report download failed:", err);
+                const raw = String(err?.message || err);
+                let userMsg = raw;
+                if (/failed to fetch/i.test(raw) || /network/i.test(raw) || /connection refused/i.test(raw) || /ECONNREFUSED/i.test(raw)) {
+                  userMsg = `Failed to reach backend at ${API_BASE}. Is the backend running? Start it at Real-estate-project-backend/Backend and ensure port 8000 is reachable.`;
+                }
+                toast({ title: "Report failed", description: userMsg });
+                setApiError(userMsg);
+              } finally {
+                setReportLoading(false);
+              }
+            }}
+            disabled={reportLoading}
           >
-            Download Full Report
+            {reportLoading ? "Generating..." : "Download Full Report"}
           </Button>
           <Button
             variant="outline"
